@@ -27,17 +27,17 @@ class UserSerializer(serializers.Serializer):
 
     def update(self, instance, validated_data):
         password = validated_data.get('password', instance.password)
-        login = validated_data.get('login', instance.login)
+        login = validated_data.get('login', instance.login) ## Not using
         instance.password = validated_data.get(password)
         return instance
     
     def to_representation(self, instance):
-        rep = super().to_representation(instance)
+        rep = super().to_representation(instance) ## Dont need it. Replace by something else
         del rep["password"]
         return rep
     
     
-class EnteringDataSerializer(serializers.Serializer):
+class EnteringDataSerializer(serializers.Serializer): ## Login Serialzier
     login = serializers.CharField()
     password = serializers.CharField()
     
@@ -45,7 +45,7 @@ class EnteringDataSerializer(serializers.Serializer):
         login = attrs.get("login")
         password = attrs.get("password")
         
-        user = models.User.objects.filter(login=login)
+        user = models.User.objects.filter(login=login) ## Use first() and then check it.
         
         if len(login) < 3:
             raise serializers.ValidationError("Короткий логин (менее 3 символов)")
@@ -88,7 +88,7 @@ class ProfileSerializer(serializers.Serializer):
         instance.save()
         return instance
     
-    def to_representation(self, instance):
+    def to_representation(self, instance): ## Dont use this method. Solve it by another way
         rep = super().to_representation(instance)
         rep["currency"] = instance.currency.name
         return rep    
@@ -125,7 +125,7 @@ class OperationSerializer(serializers.Serializer):
     date = serializers.DateTimeField(required=False)
     comment = serializers.CharField(max_length=50, required=False)
     
-    def validate(self, attrs):
+    def validate(self, attrs): ## WHatafack?
         return attrs
     
     def create(self, validated_data):
@@ -137,7 +137,7 @@ class OperationSerializer(serializers.Serializer):
         instance.save()
         return instance
     
-    def to_representation(self, instance):
+    def to_representation(self, instance): ## FUck U and this method. Find another way or separate to more serializers
         rep = super().to_representation(instance)
         # print(instance.category)
         if not instance.category:
@@ -152,5 +152,3 @@ class OperationSerializer(serializers.Serializer):
         del rep["category_id"]
         
         return rep
-    
-

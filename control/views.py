@@ -11,13 +11,14 @@ from django.db.models import Sum
 from rest_framework.decorators import api_view
 import traceback
 
-user_id = None
+user_id = None ## REMOVE
 
 
 class OperationAPIView(APIView):
     serializer_class = serializers.OperationSerializer
     
     def get(self, request):
+        ## Use django filters
         profile_id = request.GET.get("profile_id")
         # if not profile_id:
         #     return Response({"error": "profile_id обязателен"}, status=400)
@@ -30,6 +31,7 @@ class OperationAPIView(APIView):
         elif filter_type == "expense":
             operations = operations.filter(category__typ=False)
 
+        ## Resolve filtering and sorting correctly
         filter_date = request.GET.get("filter_date")
         if filter_date == "asc":
             operations = operations.order_by("date")
@@ -43,8 +45,10 @@ class OperationAPIView(APIView):
         serializer = self.serializer_class(operations, many=True)
         return Response(serializer.data)
 
+        ## Dont use if/elif many
+
     def post(self, request):
-        serializer = self.serializer_class(data=request.data)
+        serializer = self.serializer_class(data=request.data) ## To serializer
         if serializer.is_valid(raise_exception=True):
             validated = serializer.validated_data
             operation = models.Operation.objects.create(
@@ -66,7 +70,7 @@ class OperationAPIView(APIView):
             return Response({"message": "Операция не найдена"}, status=status.HTTP_404_NOT_FOUND)
             
     def put(self, request):
-        operation_id = request.data.get("id")
+        operation_id = request.data.get("id") # TO SERIALIZER
         operation = models.Operation.objects.filter(id=operation_id).first()
 
         if not operation:
@@ -99,7 +103,7 @@ class OperationAPIView(APIView):
     
 
 @api_view(['GET'])
-def get_balance(request):
+def get_balance(request): ## Use SQL or Aggregate with django ORM
     profile_id = request.GET["profile_id"]
     operations = models.Operation.objects.filter(profile_id=profile_id)
     # for i in operations:
@@ -128,19 +132,20 @@ def get_balance(request):
 
 @api_view(['GET'])
 def get_operation_by_id(request):
-    op_id = request.GET["id"]
+    op_id = request.GET["id"] ## Make sure that object exists. Else, return 404
     operation = models.Operation.objects.get(id=op_id)
     serializer = serializers.OperationSerializer(operation)
     # print(serializer.data)
     return Response(serializer.data)
     
 
-class CheckAccessAPIView(APIView):
+class CheckAccessAPIView(APIView): ## Login api view
     def post(self, request):
         data = request.data
         serializer = serializers.EnteringDataSerializer(data=data)
         serializer.is_valid(raise_exception=True)
-        user = models.User.objects.filter(login=data.get("login"))
+        user = models.User.objects.filter(login=data.get("login")) ## Use first one time. Ensure that it is not None and continue
+
         if user.exists() and check_password(data.get("password"), user.first().password):
             return Response({
             'message': True,
@@ -154,7 +159,7 @@ class UserAPIView(APIView):
     serializer_class = serializers.UserSerializer
     def get(self, request):
         user_id = request.GET.get("user_id")
-        user = models.User.objects.get(id=user_id)
+        user = models.User.objects.get(id=user_id) ## Use .first() to avoid exception if not found
         serializer = serializers.UserSerializer(user)
         return Response(serializer.data)
         
@@ -164,7 +169,7 @@ class UserAPIView(APIView):
     
         serializer.is_valid(raise_exception=True)
 
-        user = serializer.create(serializer.validated_data)
+        user = serializer.create(serializer.validated_data) ## Return user object
         return Response({
             "message": True,
             "id": user.id,
@@ -179,14 +184,13 @@ class UserAPIView(APIView):
             return Response({"message": "Пользователь удален успешно"})
         return Response({"message": "Пользователь не найден"})
     
-    def put(self, request):
+    def put(self, request): ## Update the object using the serializer
         serializer = serializers.UserSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        
-        
+
 class ProfileAPIView(APIView):
-    def post(self, request):
+    def post(self, request): ## Remake the method without 'traceback' and 'print_exc' and try\except
         try:
             serializer = serializers.ProfileSerializer(data=request.data)
             if serializer.is_valid():
@@ -195,7 +199,7 @@ class ProfileAPIView(APIView):
             return Response(serializer.errors, status=400)
 
         except Exception as e:
-            traceback.print_exc()  
+            traceback.print_exc()
             return Response({"error": str(e)}, status=500)
     
     def get(self, request):
@@ -206,7 +210,7 @@ class ProfileAPIView(APIView):
             return Response(serializer.data)
         return Response({"message": False})
     
-    def put(self, request):
+    def put(self, request): ## Dont use try\except here.
         try:
             profile_id = request.data.get("id")
             profile = models.Profile.objects.get(id=profile_id)
@@ -233,7 +237,7 @@ class CategoryAPIView(APIView):
     #     return Response(serializer.errors, status=400)
     
     def get(self, request):
-        profile_id = request.GET.get('profile_id')
+        profile_id = request.user.profile_id
         if not profile_id:
             return Response({"error": "profile_id обязателен"}, status=400)
         q = django_model.Q(profile_id__isnull=True) | django_model.Q(profile_id=profile_id)
@@ -244,18 +248,19 @@ class CategoryAPIView(APIView):
     
     def delete(self, request):
         cat_id = request.GET.get("id")
-        profile_id = request.GET.get("profile_id")
+        profile_id = request.GET.get("profile_id") ## Replace all profile_id with request.user.profile_id
         print(request.GET)
         if models.Operation.objects.filter(category_id=cat_id, profile_id=profile_id).exists():
             return Response({"message": "Есть операции с этой категорией"})
-        cat = models.Category.objects.filter(id=cat_id, profile_id__isnull=False).first()
+        cat = models.Category.objects.filter(id=cat_id, profile_id__isnull=False).first() ## Add checks for not found
+        # and not current user profile_id
         if cat:
             cat.delete()
             return Response({"message": "Категория удалена успешно"})
         return Response({"message": "Этy категории нельзя удалять"})
     
     def put(self, request):
-        data = request.data
+        data = request.data ## update on serializer
         instance = models.Category.objects.filter(id=data.get("id")).first()
         if not instance:
             return Response({"message": "Категория не найдена"}, status=404)
@@ -273,4 +278,3 @@ class CategoryAPIView(APIView):
     #     serializer.is_valid(raise_exception=True)
     #     serializer.update(model, validated_data=serializer.data)
     #     return Response(serializer.data)
-        

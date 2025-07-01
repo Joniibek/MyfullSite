@@ -11,7 +11,7 @@ class Profile(models.Model):
     user = models.OneToOneField(
         'User',
         on_delete=models.CASCADE,
-        related_name="user"
+        related_name="user" ## Replace by profile
     )
     avatar = models.CharField(max_length=100)
     last_sign_in = models.DateTimeField(auto_now=True) 
@@ -19,7 +19,7 @@ class Profile(models.Model):
         'Currency', 
         on_delete=models.SET_NULL,
         null=True, 
-        related_name="currency"
+        related_name="currency" ## Fix
         )
     
     def __str__(self):
@@ -48,7 +48,7 @@ class Operation(models.Model):
     category = models.ForeignKey(
         Category,
         on_delete=models.CASCADE,
-        related_name="category",
+        related_name="category", ## FIX
         null=True
     )
     amount = models.DecimalField(decimal_places=2, max_digits=20)
@@ -59,4 +59,10 @@ class Operation(models.Model):
 class Currency(models.Model):
     name = models.CharField(max_length=10)
     sign = models.CharField(max_length=3)
-    
+
+
+
+"""
+Learn more about SQL Indexes, how they work and how to use them effectively in Django models.
+Not need to lean on SQL level, but must understand, how index are helpful for perfomance and how to use them in Django.
+"""
