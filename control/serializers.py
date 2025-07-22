@@ -1,13 +1,15 @@
 from rest_framework import serializers
 from control import models
-from django.contrib.auth.hashers import make_password
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import make_password, check_password
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from control import models
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
 
 
 
 class UserSerializer(serializers.Serializer):
     login = serializers.CharField()
-    password = serializers.CharField()
+    password = serializers.CharField(write_only=True)
     
     def validate_password(self, value):
         if len(value) < 3:
@@ -22,50 +24,75 @@ class UserSerializer(serializers.Serializer):
         return value
 
     def create(self, validated_data):
-        validated_data["password"] = make_password(validated_data["password"])
-        return models.User.objects.create(**validated_data)
+        return models.User.objects.create_user(**validated_data)
+    
+    
+class ChangeUserPasswordSerializer(serializers.Serializer):
+    password = serializers.CharField()
+    login = serializers.CharField(required=False)
+    
+    def validate(self, attrs):
+        password = attrs["password"]
+        if len(password) < 3:
+            raise serializers.ValidationError("Пароль не может быть меньше 3 символов")
+        if attrs["login"]:
+            raise serializers.ValidationError("Нельзя менять логин")
+        return attrs
 
     def update(self, instance, validated_data):
-        password = validated_data.get('password', instance.password)
-        login = validated_data.get('login', instance.login) ## Not using
-        instance.password = validated_data.get(password)
+        instance.password = validated_data.get("password", instance.password)
         return instance
     
-    def to_representation(self, instance):
-        rep = super().to_representation(instance) ## Dont need it. Replace by something else
-        del rep["password"]
-        return rep
+    # def to_representation(self, instance):
+    #     rep = super().to_representation(instance) ## Dont need it. Replace by something else ?+
+    #     del rep["password"]
+    #     return rep
     
     
-class EnteringDataSerializer(serializers.Serializer): ## Login Serialzier
-    login = serializers.CharField()
-    password = serializers.CharField()
-    
+class LogInSerializer(serializers.Serializer): ## Login Serialzier ?+
+    login = serializers.CharField(min_length=3, max_length=20)
+    password = serializers.CharField(min_length=3, max_length=15, write_only=True)
     def validate(self, attrs):
         login = attrs.get("login")
         password = attrs.get("password")
+        user = models.User.objects.filter(login=login).first() ## Use first() and then check it. ?+
+        if user:
+            if len(login) < 3:
+                raise serializers.ValidationError("Короткий логин (менее 3 символов)")            
+            if len(password) < 3:
+                raise serializers.ValidationError("Короткий пароль (не менее 3 символов)")
+            elif not check_password(password, user.password):
+                print(password, user.password)
+                raise serializers.ValidationError("Неверный пароль")
+            return user
+        raise serializers.ValidationError("Неверный логин")
         
-        user = models.User.objects.filter(login=login) ## Use first() and then check it.
-        
-        if len(login) < 3:
-            raise serializers.ValidationError("Короткий логин (менее 3 символов)")
-        elif not user.exists():
-            raise serializers.ValidationError("Неверный логин")
-        
-        if len(password) < 3:
-            raise serializers.ValidationError("Короткий пароль (не менее 3 символов)")
-        elif not check_password(password, user.first().password):
-            raise serializers.ValidationError("Неверный пароль")
-        return attrs
 
+class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        login = attrs.get("login")
+        password = attrs.get("password")
+        user = models.User.objects.filter(login=login).first()
+        if not user:
+            raise AuthenticationFailed('Неверный логин')
+        if not check_password(password, user.password):
+            raise AuthenticationFailed('Неверный пароль')
+        refresh = self.get_token(user)
+        access = refresh.access_token
+
+        return {
+            'refresh': str(refresh),
+            'access': str(access),
+        }
     
     
 class ProfileSerializer(serializers.Serializer):
     id = serializers.IntegerField(read_only=True)
     name = serializers.CharField()
     avatar = serializers.CharField()
+    currency_id = serializers.IntegerField(write_only=True)
+    currency = serializers.SerializerMethodField(read_only=True)
     last_sign_in = serializers.DateTimeField(read_only=True)  
-    currency_id = serializers.IntegerField()
     user_id = serializers.IntegerField()
     
     def validate_currency_id(self, value):
@@ -88,10 +115,13 @@ class ProfileSerializer(serializers.Serializer):
         instance.save()
         return instance
     
-    def to_representation(self, instance): ## Dont use this method. Solve it by another way
-        rep = super().to_representation(instance)
-        rep["currency"] = instance.currency.name
-        return rep    
+    def get_currency(self, obj):
+        return obj.currency.name
+    
+    # def to_representation(self, instance): ## Dont use this method. Solve it by another way  ?-
+    #     rep = super().to_representation(instance)
+    #     rep["currency"] = instance.currency.name
+    #     return rep
     
 class CategorySerializer(serializers.Serializer):
     id = serializers.IntegerField(read_only=True)
@@ -111,7 +141,6 @@ class CategorySerializer(serializers.Serializer):
 
     
     def update(self, instance, validated_data):
-        # print(validated_data)
         instance.name = validated_data.get('name', instance.name)
         instance.save()
         return instance
@@ -119,36 +148,41 @@ class CategorySerializer(serializers.Serializer):
     
 class OperationSerializer(serializers.Serializer):
     id = serializers.IntegerField(required=False)
-    profile_id = serializers.IntegerField()
-    category_id = serializers.IntegerField(required=False)
+    profile_id = serializers.IntegerField(write_only=True)
+    category_id = serializers.IntegerField(write_only=True)
+    typ= serializers.IntegerField(source="category.typ", read_only=True) 
+    category_name = serializers.CharField(source="category.name", read_only=True)
     amount = serializers.DecimalField(max_digits=20, decimal_places=2)
     date = serializers.DateTimeField(required=False)
     comment = serializers.CharField(max_length=50, required=False)
-    
-    def validate(self, attrs): ## WHatafack?
-        return attrs
-    
+
     def create(self, validated_data):
-        return models.Operation.objects.create(**validated_data)
-    
+        return models.Operation.objects.create(
+            profile_id=self.context["profile_id"],
+            category_id=validated_data["category_id"],
+            amount=validated_data["amount"],
+            comment=validated_data.get("comment", ""),
+            date=validated_data.get("date"),
+        )
+
     def update(self, instance, validated_data):
-        instance.amount = validated_data.get('amount', instance.amount)
-        instance.comment = validated_data.get('comment', instance.comment)
+        instance.amount = validated_data.get("amount", instance.amount)
+        instance.comment = validated_data.get("comment", instance.comment)
         instance.save()
         return instance
     
-    def to_representation(self, instance): ## FUck U and this method. Find another way or separate to more serializers
-        rep = super().to_representation(instance)
-        # print(instance.category)
-        if not instance.category:
-            rep["category_name"] = "----"
-            rep["typ"] = ""
-            # print("efsmpfm")
-        else:
-            rep["category_name"] = instance.category.name
-            rep["typ"] = instance.category.typ
-        rep["currency"] = instance.profile.currency.name
-        del rep["profile_id"]
-        del rep["category_id"]
+    # def to_representation(self, instance): ## FUck U and this method. Find another way or separate to more serializers ?-
+    #     rep = super().to_representation(instance)
+    #     # print(instance.category)
+    #     if not instance.category:
+    #         rep["category_name"] = "----"
+    #         rep["typ"] = ""
+    #     else:
+    #         rep["category_name"] = instance.category.name
+    #         rep["typ"] = instance.category.typ
+    #     rep["currency"] = instance.profile.currency.name
+    #     del rep["profile_id"]
+    #     del rep["category_id"]
         
-        return rep
+    #     return rep
+    

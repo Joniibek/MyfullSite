@@ -1,9 +1,42 @@
 from django.db import models
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 
-class User(models.Model):
+
+
+class UserManager(BaseUserManager):
+    def create_user(self, login, password=None):
+        if not login:
+            raise ValueError("Users must have a login")
+        user = self.model(login=login)  
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+    
+    def create_superuser(self, login, password=None):
+        user = self.create_user(login, password)
+        user.is_admin = True
+        user.save(using=self._db)
+        return user
+    
+
+class User(AbstractBaseUser):
     login = models.CharField(max_length=20, unique=True)
-    password = models.CharField(max_length=15)
-    # profile = models.OneToOneField('Profile', on_delete=models.CASCADE, null=True, blank=True, related_name='user')
+    is_active = models.BooleanField(default=True)
+    is_admin = models.BooleanField(default=False)
+    objects = UserManager()
+
+    USERNAME_FIELD = 'login'
+        
+    @property
+    def is_staff(self):
+        return self.is_admin
+
+
+    # login = models.CharField(max_length=20, unique=True)
+    # password = models.CharField(max_length=15)
+
+    # USERNAME_FIELD = ("login")
+    # PASSWORD_FIELD = ("password")
 
 
 class Profile(models.Model):
@@ -11,7 +44,7 @@ class Profile(models.Model):
     user = models.OneToOneField(
         'User',
         on_delete=models.CASCADE,
-        related_name="user" ## Replace by profile
+        related_name="profile" ## Replace by profile ?+
     )
     avatar = models.CharField(max_length=100)
     last_sign_in = models.DateTimeField(auto_now=True) 
@@ -19,7 +52,7 @@ class Profile(models.Model):
         'Currency', 
         on_delete=models.SET_NULL,
         null=True, 
-        related_name="currency" ## Fix
+        related_name="profile_currency" ## Fix ?+
         )
     
     def __str__(self):
@@ -32,6 +65,7 @@ class Category(models.Model):
     profile = models.ForeignKey(
         'Profile',
         on_delete=models.CASCADE,
+        related_name="category",
         null=True
     )
     
@@ -40,7 +74,6 @@ class Category(models.Model):
     
     
 class Operation(models.Model):
-    # typ = models.BooleanField()
     profile = models.ForeignKey(
         Profile, 
         on_delete=models.CASCADE, 
@@ -48,14 +81,14 @@ class Operation(models.Model):
     category = models.ForeignKey(
         Category,
         on_delete=models.CASCADE,
-        related_name="category", ## FIX
+        related_name="operation", ## FIX ?+
         null=True
     )
     amount = models.DecimalField(decimal_places=2, max_digits=20)
-    comment = models.CharField(blank=True, null=True, max_length=50)
+    comment = models.CharField(blank=True, max_length=50)
     date = models.DateTimeField(auto_now_add=True)
-    
-    
+
+        
 class Currency(models.Model):
     name = models.CharField(max_length=10)
     sign = models.CharField(max_length=3)
