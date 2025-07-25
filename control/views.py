@@ -15,18 +15,14 @@ from channels.layers import get_channel_layer
 from rest_framework.permissions import IsAuthenticated
 from decimal import Decimal
 import django_filters
-from .serializers import LoginTokenObtainPairSerializer  
-from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.exceptions import AuthenticationFailed
-from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
+from django.db.utils import IntegrityError
 
 
 User = get_user_model()
 
 channel_layer = get_channel_layer()
-print("каналл", channel_layer)
 
 # user_id = None ## REMOVE ?+
 
@@ -156,29 +152,14 @@ def get_operation_by_id(request):
     return Response("Операция не найдена", status=status.HTTP_404_NOT_FOUND)
 
 
-# class LogInAPIView(TokenObtainPairView): ## Login api view ?+
-#     serializer_class = serializers.LoginTokenObtainPairSerializer
-#     def post(self, request):
-#         data = request.data
-#         tokens_serializer = self.serializer_class(data=data)
-#         tokens_serializer.is_valid(raise_exception=True)
-#         # serializer = serializers.LogInSerializer(data=data)
-#         # serializer.is_valid(raise_exception=True)
-#         # user = models.User.objects.filter(login=data.get("login")).first() ## Use first one time. Ensure that it is not None and continue ?+
-#         # if user and check_password(data.get("password"), user.password):
-#             # return Response("Доступ предоставлен", status=status.HTTP_200_OK)
-#         return Response(tokens_serializer, status=status.HTTP_200_OK)
-#         return Response("Пользователь не найден", status=status.HTTP_404_NOT_FOUND)
-
 class LogInAPIView(APIView):
     serializer_class = serializers.LogInSerializer
-    # print("qwertyu")
     # permission_classes = [IsAuthenticated]
     def post(self, request):
         data = request.data
         serializer = self.serializer_class(data=data)
         serializer.is_valid(raise_exception=True)
-        print(serializer.validated_data)
+        
         refresh = RefreshToken.for_user(serializer.validated_data)
         access = refresh.access_token
         return Response({'refresh': str(refresh),'access': str(access)}, status=status.HTTP_200_OK)
@@ -195,7 +176,7 @@ class LogInAPIView(APIView):
 class UserAPIView(APIView):
     serializer_class = serializers.UserSerializer
     def get(self, request):
-        user_id = request.GET.get("user_id")
+        user_id = request.user.id
         user = models.User.objects.filter(id=user_id).first() ## Use .first() to avoid exception if not found ?+
         if user:
             serializer = serializers.UserSerializer(user)
@@ -206,8 +187,18 @@ class UserAPIView(APIView):
         data = request.data
         serializer = self.serializer_class(data=data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        try:
+            serializer.save()
+        except IntegrityError:
+            return Response("Данный логин уже использован", status=status.HTTP_400_BAD_REQUEST)
+        tokens = serializer.get_token()
+        access = tokens[0]
+        refresh = tokens[1]
+        return Response({
+            "data": serializer.data,
+            "access": access,
+            "refresh": refresh,
+            }, status=status.HTTP_201_CREATED)
         
     def delete(self, request):
         user_id = request.GET["user_id"]
@@ -227,31 +218,35 @@ class UserAPIView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response("Пользователь не найден", status=status.HTTP_404_NOT_FOUND)
     
-
-
-    
         
 class ProfileAPIView(APIView):
-    def post(self, request): ## Remake the method without 'traceback' and 'print_exc' and try\except ?+
+    permission_classes  = [IsAuthenticated]
+
+    def post(self, request): 
         data = request.data
+        user_id = request.user.id
+        data["user_id"] = user_id
         serializer = serializers.ProfileSerializer(data=data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    def get(self, request):
-        user_id = request.GET.get("user_id")
+    def get(self, request: dict):
+        user_id = request.user.id
         profile = models.Profile.objects.filter(user_id=user_id).first()
         if profile:
             serializer = serializers.ProfileSerializer(profile)
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response("Профиль не найден", status=status.HTTP_404_NOT_FOUND)
     
-    def put(self, request): ## Dont use try\except here. ?+
-            profile_id = request.data.get("id")
+    def put(self, request):
+            profile_id = request.user.profile.id
             profile = models.Profile.objects.get(id=profile_id)
+            data = request.data
+            user_id = request.user.id
+            data["user_id"] = user_id
             if profile:
-                serializer = serializers.ProfileSerializer(profile, data=request.data)
+                serializer = serializers.ProfileSerializer(profile, data=data)
                 serializer.is_valid(raise_exception=True)
                 serializer.save()
                 return Response(serializer.data)
@@ -287,7 +282,7 @@ class CategoryAPIView(APIView):
             return Response("Этy категории нельзя удалять", status=status.HTTP_400_BAD_REQUEST)
         return Response("Профиль не найден", status=status.HTTP_404_NOT_FOUND)
     
-    def put(self, request):
+    def put(self, request: dict):
         data = request.data         ## update on serializer ?+
         instance = models.Category.objects.filter(id=data.get("id")).first()
         if instance:
