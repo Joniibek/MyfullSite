@@ -6,36 +6,61 @@
     <title>Document</title>
   </head>
   <body>
-    <form action="check_access">
-      <input type="text" id="login" />
-      <input type="password" id="password" />
-      <button>Готово</button>
+    <input type="text" id="text" placeholder="ваш токен">
+    <button id="btn">Отправить токен</button><br><br>
+
+    <form action="">
+      <input type="number" required id="profile_id">
+      <button id="btnBalanceQuery">запрос баланса</button>
+      <p id="balance"></p>
     </form>
     <script>
-      const login = document.getElementById("login").value;
-      const password = document.getElementById("password").value;
-      const btn = document.querySelector("button");
+        const token = document.getElementById("text");
+const btn = document.getElementById("btn");
+const balanceButton = document.getElementById("btnBalanceQuery");
+const balance = document.getElementById("balance");
+const idInput = document.getElementById("profile_id");
 
-      userData = {
-        login: login,
-        password: password,
-      };
+balanceButton.addEventListener("click", async (e) => {
+  e.preventDefault();
 
-      async function getUserData() {
-        let response = await fetch("http://127.0.0.1:8000/check_access/", {
-          method: "POST",
-          body: JSON.stringify(userData),
-        });
-        const data = await res.json();
+  const tok = token.value.trim();
+  if (!tok) {
+    alert("Введи токен, брат!");
+    return;
+  }
 
-        if (data.access == true) {
-          alert("Успех: ");
-        } else {
-          alert(data.access);
-        }
+  try {
+    let response = await fetch(`http://127.0.0.1:8000/get_balance/?profile_id=${idInput.value}`, {
+      headers: {
+        "Authorization": `Bearer ${tok}`
       }
+    });
 
-      btn.addEventListener("click", getUserData());
+    if (!response.ok) {
+      throw new Error("Ошибка запроса: " + response.status);
+    }
+
+    let data = await response.json();
+    balance.innerText = `Баланс: ${data}`;
+  } catch (err) {
+    balance.innerText = "Ошибка: " + err.message;
+  }
+});
+
+btn.addEventListener("click", () => {
+  const tok = token.value.trim();
+  if (!tok) {
+    alert("Введи токен!");
+    return;
+  }
+
+  const socket = new WebSocket(`ws://localhost:8000/ws/alerts/${tok}`);
+  socket.onmessage = e => console.log("Push от сервера:", e.data);
+  socket.onclose = function(e) {
+  console.log("DISCONNECTED:", e);
+  };
+});
     </script>
   </body>
 </html>

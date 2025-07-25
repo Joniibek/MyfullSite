@@ -7,29 +7,48 @@ from . import serializers
 from rest_framework.response import Response
 from django.contrib.auth.hashers import check_password
 from django.http import JsonResponse
-from django.db.models import Sum 
-from rest_framework.decorators import api_view
-import traceback
+from django.db.models import Sum, F, When, Case, DecimalField
+from django.db.models.functions import Coalesce
+from rest_framework.decorators import api_view, permission_classes
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from rest_framework.permissions import IsAuthenticated
+from decimal import Decimal
+import django_filters
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.contrib.auth import get_user_model
+from django.db.utils import IntegrityError
 
-user_id = None
+
+User = get_user_model()
+
+channel_layer = get_channel_layer()
+
+# user_id = None ## REMOVE ?+
+
+ 
+def index(request):
+    return render(request, "index.html")
+
+
+class OperationFilter(django_filters.FilterSet):
+    typ = django_filters.NumberFilter(field_name="category__typ")
 
 
 class OperationAPIView(APIView):
     serializer_class = serializers.OperationSerializer
     
-    def get(self, request):
+    def get(self, request):           ## Use django filters ?-
         profile_id = request.GET.get("profile_id")
-        # if not profile_id:
-        #     return Response({"error": "profile_id обязателен"}, status=400)
-
         operations = models.Operation.objects.filter(profile_id=profile_id)
 
-        filter_type = request.GET.get("filter_type")
-        if filter_type == "income":
-            operations = operations.filter(category__typ=True)
-        elif filter_type == "expense":
-            operations = operations.filter(category__typ=False)
+        # filter_type = request.GET.get("filter_type")
+        # if filter_type == "income":
+        #     operations = operations.filter(category__typ=True)
+        # elif filter_type == "expense":
+        #     operations = operations.filter(category__typ=False)
 
+        ## Resolve filtering and sorting correctly  ?-
         filter_date = request.GET.get("filter_date")
         if filter_date == "asc":
             operations = operations.order_by("date")
@@ -43,179 +62,195 @@ class OperationAPIView(APIView):
         serializer = self.serializer_class(operations, many=True)
         return Response(serializer.data)
 
+        ## Dont use if/elif many  ?-
+
+
     def post(self, request):
-        serializer = self.serializer_class(data=request.data)
-        if serializer.is_valid(raise_exception=True):
-            validated = serializer.validated_data
-            operation = models.Operation.objects.create(
-                profile_id=validated['profile_id'],
-                category_id=validated['category_id'],
-                amount=validated['amount'],
-                comment=validated.get('comment', '')
-            )
-            response_serializer = self.serializer_class(operation)
-            return Response(response_serializer.data)
-        return Response(serializer.errors, status=400)
+        profile_id = request.data.get("profile_id")
+        global channel_layer
+        channel_name = f'user_{profile_id}'
+        async_to_sync(channel_layer.group_send)(channel_name, 
+                {
+                "type": "send_message",
+                "message": "Ураа! новая операция добавлена"
+                })
+        
+        serializer = serializers.OperationSerializer(data=request.data, context={"profile_id": profile_id})
+        # serializer = self.serializer_class(data=request.data) ## To serializer ?+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     def delete(self, request):
-        try:
-            operation = models.Operation.objects.get(id=request.GET.get("id"))
+        op_id = request.GET.get("id")
+        operation = models.Operation.objects.get(id=op_id)
+        if operation:
             operation.delete()
             return Response({"message": "Операция успешно удалена"})
-        except models.Operation.DoesNotExist:
-            return Response({"message": "Операция не найдена"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"message": "Операция не найдена"}, status=status.HTTP_404_NOT_FOUND)
             
     def put(self, request):
-        operation_id = request.data.get("id")
+        operation_id = request.data["id"] # TO SERIALIZER ?+
         operation = models.Operation.objects.filter(id=operation_id).first()
-
-        if not operation:
-            return Response({"error": "Операция не найдена"}, status=404)
-
-        amount = request.data.get("amount")
-        category_id = request.data.get("category_id")
-        comment = request.data.get("comment")  # может быть None
-
-        if amount is not None:
-            operation.amount = amount
-        if category_id is not None:
-            operation.category_id = category_id
-        if "comment" in request.data:
-            operation.comment = comment
-
-        operation.save()
-
-        serializer = self.serializer_class(operation)
-        return Response(serializer.data)
-        
-    # def put(self, request):
-    #     operation_id = request.data.get("id")
-    #     operation = models.Operation.objects.filter(id=operation_id).first()
-    #     serializer = serializers.OperationSerializer(operation, data=request.data)
-    #     if serializer.is_valid():
-    #         serializer.save()
-    #         return Response(serializer.data)
-    #     return Response(serializer.errors, status=400)
+        if operation:
+            serializer = self.serializer_class(operation,data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response("Operation not found", status=status.HTTP_400_BAD_REQUEST)
     
-
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_balance(request):
     profile_id = request.GET["profile_id"]
-    operations = models.Operation.objects.filter(profile_id=profile_id)
-    # for i in operations:
-    #     if i.category:
-    #         positive_operations = operations.aggregate()
-    try:
-        if operations:
-            positive_op = []
-            negative_op = []
-            for o in operations:
-                if o.category != None:
-                    if o.category.typ == True:
-                        positive_op.append(o.amount)
-                    else:
-                        negative_op.append(o.amount)
-                else:
-                    return Response({"balance": "0 "})
-            positive_balance = sum(positive_op)
-            negative_balance = sum(negative_op)
-            res = positive_balance - negative_balance
-            return Response({"balance": res})   
-    except Exception as e:
-        return Response({"error": str(e)})
-    return Response({"balance": "0 "})  
+    if profile_id:
+        res = models.Operation.objects.filter(profile_id=profile_id).aggregate(
+            total=Coalesce(
+                Sum(
+                    Case(
+                        When(category__typ=True, then=F("amount")),
+                        When(category__typ=False, then=-F("amount")),
+                        output_field=DecimalField(),
+                    )
+                ),
+                0,
+                output_field=DecimalField(),
+            ),
+        ).get("total")
+        global channel_layer        
+        channel_name = f'user_{profile_id}'
+        if res < -100:
+            async_to_sync(channel_layer.group_send)(channel_name, 
+                {
+                "type": "send_message",
+                "message": "Ваш долг больше 100 сомони"
+                })
+        elif res > 1000:
+            async_to_sync(channel_layer.group_send)(channel_name,
+                {
+                    "type": "send_message",
+                    "message": "Ураа, денег заебись"
+                }
+            )
+        elif res == -20:
+            async_to_sync(channel_layer.group_send)(channel_name,
+            {
+                "type": "send_message",
+                "message": "Ваш долг равен 20йцукенг"                
+            })
+        return Response(res, status=status.HTTP_200_OK)
+    return Response("Профиль не найден", status=status.HTTP_404_NOT_FOUND)
 
 
 @api_view(['GET'])
 def get_operation_by_id(request):
-    op_id = request.GET["id"]
+    op_id = request.GET["id"] ## Make sure that object exists. Else, return 404 ?+
     operation = models.Operation.objects.get(id=op_id)
-    serializer = serializers.OperationSerializer(operation)
-    # print(serializer.data)
-    return Response(serializer.data)
-    
+    if operation:
+        serializer = serializers.OperationSerializer(operation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response("Операция не найдена", status=status.HTTP_404_NOT_FOUND)
 
-class CheckAccessAPIView(APIView):
+
+class LogInAPIView(APIView):
+    serializer_class = serializers.LogInSerializer
+    # permission_classes = [IsAuthenticated]
     def post(self, request):
         data = request.data
-        serializer = serializers.EnteringDataSerializer(data=data)
+        serializer = self.serializer_class(data=data)
         serializer.is_valid(raise_exception=True)
-        user = models.User.objects.filter(login=data.get("login"))
-        if user.exists() and check_password(data.get("password"), user.first().password):
-            return Response({
-            'message': True,
-            'id': user.first().id,
-            'login': user.first().login
-        })
-        return Response({"message": False})
+        
+        refresh = RefreshToken.for_user(serializer.validated_data)
+        access = refresh.access_token
+        return Response({'refresh': str(refresh),'access': str(access)}, status=status.HTTP_200_OK)
+        # return Response("Пользователь не найден", status=status.HTTP_404_NOT_FOUND)
+    
+    # def post(self, request):
+    #     data = request.data
+    #     serializer = self.serializer_class(data=data)
+    #     serializer.is_valid(raise_exception=True)
+    #     tokens = serializer.validated_data
+    #     return Response(tokens, status=status.HTTP_200_OK)
 
 
 class UserAPIView(APIView):
     serializer_class = serializers.UserSerializer
     def get(self, request):
-        user_id = request.GET.get("user_id")
-        user = models.User.objects.get(id=user_id)
-        serializer = serializers.UserSerializer(user)
-        return Response(serializer.data)
+        user_id = request.user.id
+        user = models.User.objects.filter(id=user_id).first() ## Use .first() to avoid exception if not found ?+
+        if user:
+            serializer = serializers.UserSerializer(user)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response("Пользователь не найден", status=status.HTTP_404_NOT_FOUND)
         
     def post(self, request):
         data = request.data
         serializer = self.serializer_class(data=data)
-    
         serializer.is_valid(raise_exception=True)
-
-        user = serializer.create(serializer.validated_data)
+        try:
+            serializer.save()
+        except IntegrityError:
+            return Response("Данный логин уже использован", status=status.HTTP_400_BAD_REQUEST)
+        tokens = serializer.get_token()
+        access = tokens[0]
+        refresh = tokens[1]
         return Response({
-            "message": True,
-            "id": user.id,
-            "login": user.login
-        })
+            "data": serializer.data,
+            "access": access,
+            "refresh": refresh,
+            }, status=status.HTTP_201_CREATED)
         
     def delete(self, request):
         user_id = request.GET["user_id"]
         user = models.User.objects.filter(id=user_id).first()
         if user:
             user.delete()
-            return Response({"message": "Пользователь удален успешно"})
-        return Response({"message": "Пользователь не найден"})
+            return Response({"message": "Пользователь удален успешно"}, status=status.HTTP_201_CREATED)
+        return Response({"message": "Пользователь не найден"}, status=status.HTTP_404_NOT_FOUND)
     
-    def put(self, request):
-        serializer = serializers.UserSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        
+    def put(self, request): ## Update the object using the serializer ?+
+        user_id = request.data["id"]
+        instance_user = models.User.objects.filter(id=user_id).first()
+        if instance_user:
+            serializer = serializers.ChangeUserPasswordSerializer(data=request.data, instance=instance_user)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response("Пользователь не найден", status=status.HTTP_404_NOT_FOUND)
+    
         
 class ProfileAPIView(APIView):
-    def post(self, request):
-        try:
-            serializer = serializers.ProfileSerializer(data=request.data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data)
-            return Response(serializer.errors, status=400)
+    permission_classes  = [IsAuthenticated]
 
-        except Exception as e:
-            traceback.print_exc()  
-            return Response({"error": str(e)}, status=500)
-    
-    def get(self, request):
-        user_id = request.GET.get("user_id")
+    def post(self, request): 
+        data = request.data
+        user_id = request.user.id
+        data["user_id"] = user_id
+        serializer = serializers.ProfileSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def get(self, request: dict):
+        user_id = request.user.id
         profile = models.Profile.objects.filter(user_id=user_id).first()
         if profile:
             serializer = serializers.ProfileSerializer(profile)
-            return Response(serializer.data)
-        return Response({"message": False})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response("Профиль не найден", status=status.HTTP_404_NOT_FOUND)
     
     def put(self, request):
-        try:
-            profile_id = request.data.get("id")
+            profile_id = request.user.profile.id
             profile = models.Profile.objects.get(id=profile_id)
-            serializer = serializers.ProfileSerializer(profile, data=request.data)
-            if serializer.is_valid(raise_exception=True):
+            data = request.data
+            user_id = request.user.id
+            data["user_id"] = user_id
+            if profile:
+                serializer = serializers.ProfileSerializer(profile, data=data)
+                serializer.is_valid(raise_exception=True)
                 serializer.save()
                 return Response(serializer.data)
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
+            return Response("Профиль не найден",  status=status.HTTP_404_NOT_FOUND)
         
         
 class CategoryAPIView(APIView):
@@ -223,54 +258,36 @@ class CategoryAPIView(APIView):
         serializer = serializers.CategorySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
-    # def post(self, request):
-    #     serializer = serializers.CategorySerializer(data=request.data)
-    #     if serializer.is_valid(raise_exception=True):
-    #         cat = serializer.create(serializer.validated_data)
-    #         serializer = serializers.CategorySerializer(cat)
-    #         return Response(serializer.data)
-    #     return Response(serializer.errors, status=400)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
     def get(self, request):
-        profile_id = request.GET.get('profile_id')
+        profile_id = request.user.profile_id
         if not profile_id:
             return Response({"error": "profile_id обязателен"}, status=400)
         q = django_model.Q(profile_id__isnull=True) | django_model.Q(profile_id=profile_id)
         cats = models.Category.objects.filter(q)
         serializer = serializers.CategorySerializer(cats, many=True)
-        
         return Response(serializer.data)
     
     def delete(self, request):
         cat_id = request.GET.get("id")
-        profile_id = request.GET.get("profile_id")
-        print(request.GET)
-        if models.Operation.objects.filter(category_id=cat_id, profile_id=profile_id).exists():
-            return Response({"message": "Есть операции с этой категорией"})
-        cat = models.Category.objects.filter(id=cat_id, profile_id__isnull=False).first()
-        if cat:
-            cat.delete()
-            return Response({"message": "Категория удалена успешно"})
-        return Response({"message": "Этy категории нельзя удалять"})
+        profile_id = request.GET.get("profile_id") ## Replace all profile_id with request.user.profile_id ?-
+        if profile_id:
+            if models.Operation.objects.filter(category_id=cat_id, profile_id=profile_id).exists():
+                return Response("Есть операции с этой категорией", status=status.HTTP_400_BAD_REQUEST)
+            cat = models.Category.objects.filter(id=cat_id, profile_id__isnull=False).first() ## Add checks for not found ?+
+            if cat:
+                cat.delete()
+                return Response("Категория удалена успешно", status=status.HTTP_200_OK)
+            return Response("Этy категории нельзя удалять", status=status.HTTP_400_BAD_REQUEST)
+        return Response("Профиль не найден", status=status.HTTP_404_NOT_FOUND)
     
-    def put(self, request):
-        data = request.data
+    def put(self, request: dict):
+        data = request.data         ## update on serializer ?+
         instance = models.Category.objects.filter(id=data.get("id")).first()
-        if not instance:
-            return Response({"message": "Категория не найдена"}, status=404)
-
-        serializer = serializers.CategorySerializer(instance, data=data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()  # Использует update() внутри, всё правильно
-        return Response(serializer.data)
-
-    # def put(self, request):
-    #     # print(request.data)
-    #     data = request.data
-    #     model = models.Category.objects.filter(id=request.data["id"]).first()
-    #     serializer = serializers.CategorySerializer(data=data)
-    #     serializer.is_valid(raise_exception=True)
-    #     serializer.update(model, validated_data=serializer.data)
-    #     return Response(serializer.data)
-        
+        if instance:
+            serializer = serializers.CategorySerializer(instance, data=data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()   # Использует update() внутри, всё правильно ?+
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({"message": "Категория не найдена"}, status=status.HTTP_404_NOT_FOUND)
